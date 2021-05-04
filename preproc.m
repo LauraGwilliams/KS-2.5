@@ -1,8 +1,8 @@
 %% define params
 
 % branch decisions
-sys_flag = 'python'; % 'matlab', 'python' - which language will you use?
-user = 'lg';
+sys_flag = 'matlab'; % 'matlab', 'python' - which language will you use?
+user = 'mkl';
 
 % data curation params
 ops.trange    = [240 840]; % time range to sort
@@ -29,15 +29,15 @@ switch user
     % Matt's paths
     case 'mkl'
         addpath(genpath('/home/matt_l/matlab/npy-matlab/'))
-        addpath(genpath('/home/matt_l/matlab/KS_LG_MKL/')) % path to kilosort folder
-        addpath(genpath('/home/matt_l/matlab/KS-2.5'))
+        addpath(genpath('/home/matt_l/matlab/KS-2.5')) % path to kilosort folder
         addpath(genpath('/home/matt_l/matlab/neuropixels/')) % path to kilosort folder
         addpath(genpath('/home/matt_l/matlab/TIMIT')) % path to timit preproc
 
         timitPath = '/home/matt_l/matlab/TIMIT';
         rootZ = '/userdata/matt_l/neuropixels/NP04/raw/NP04_B2_g0/NP04_B2_g0_imec0/'; % the raw data binary file is in this folder
         rootH = rootZ; % path to temporary binary file (same size as data, should be on fast SSD)
-        pathToYourConfigFile = '/home/matt_l/matlab/KS_LG_MKL/configFiles'; % take from Github folder and put it somewhere else (together with the master_file)
+        pathToYourConfigFile = '/home/matt_l/matlab/KS-2.5/configFiles'; % take from Github folder and put it somewhere else (together with the master_file)
+        ks_output_dir = [rootZ '/out_sort'];
 end
 
 % regardless of user:
@@ -289,7 +289,7 @@ spike_ev = zeros(length(evnt), size(all_data_ds,1), 2*new_sfreq);
 spike_ds = zeros(length(evnt), size(all_data_ds,1), 2000);
 evoked_audio = zeros(length(evnt), n_plot_audsamp);
 corrcoefs = zeros(1, length(evnt));
-for j = 1:3 %1:length(evnt)
+for j = 1:length(evnt)
     
     % get tmin and tmax for this sentence
     sec_start = evnt(j).CorrectStartTime;
@@ -354,7 +354,12 @@ for j = 1:3 %1:length(evnt)
     peakEnv_rs = abs(resample(peakEnv, spk_fs_after_decim, peakRate_fs));
 
     % Add zero padding to waveform either side as appropriate
-    t1 = [zeros(tmin*fw,1); t1(ceil(abs(this_tdiff)*fw):end) ;zeros(tmax*fw,1)];
+    switch user
+        case 'lg'
+            t1 = [zeros(tmin*fw,1); t1(ceil(abs(this_tdiff)*fw):end) ;zeros(tmax*fw,1)];
+        case 'mkl'
+            t1 = [zeros(tmin*fw,1); t1(ceil(abs(tdiff(j))*fw):end) ;zeros(tmax*fw,1)];
+    end
     t1 = resample(t1,new_fs,fw);
 
     % spectrogram
