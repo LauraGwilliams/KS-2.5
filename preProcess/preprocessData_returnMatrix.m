@@ -69,7 +69,7 @@ if fid<3
 end
 fidW        = fopen(ops.fproc,   'w+'); % open for writing processed data
 if fidW<3
-    error('Could not open %s for writing.',ops.fproc);    
+    error('Could not open %s for writing.',ops.fproc);
 end
 
 % weights to combine batches at the edge
@@ -77,11 +77,14 @@ w_edge = linspace(0, 1, ops.ntbuff)';
 ntb = ops.ntbuff;
 datr_prev = gpuArray.zeros(ntb, ops.Nchan, 'single');
 
+% init list
+all_data = [];
+
 for ibatch = 1:Nbatch
     % we'll create a binary file of batches of NT samples, which overlap consecutively on ops.ntbuff samples
     % in addition to that, we'll read another ops.ntbuff samples from before and after, to have as buffers for filtering
     offset = max(0, ops.twind + 2*NchanTOT*(NT * (ibatch-1) - ntb)); % number of samples to start reading at.
-    
+
     fseek(fid, offset, 'bof'); % fseek to batch start in raw file
 
     buff = fread(fid, [NchanTOT NTbuff], '*int16'); % read and reshape. Assumes int16 data (which should perhaps change to an option)
@@ -96,23 +99,23 @@ for ibatch = 1:Nbatch
         bpad = repmat(buff(:,1), 1, ntb);
         buff = cat(2, bpad, buff(:, 1:NTbuff-ntb)); % The very first batch has no pre-buffer, and has to be treated separately
     end
-    
+
     datr    = gpufilter(buff, ops, chanMap); % apply filters and median subtraction
-    
+
 %     datr(ntb + [1:ntb], :) = datr_prev;
     datr(ntb + [1:ntb], :) = w_edge .* datr(ntb + [1:ntb], :) +...
         (1 - w_edge) .* datr_prev;
-   
+
     datr_prev = datr(ntb +NT + [1:ops.ntbuff], :);
     datr    = datr(ntb + (1:NT),:); % remove timepoints used as buffers
-   
+
     datr    = datr * Wrot; % whiten the data and scale by 200 for int16 range
 
     datcpu  = gather(int16(datr')); % convert to int16, and gather on the CPU side
-    
+
     % collect the data into a big matrix
     all_data = [all_data, datcpu];
-    
+
     count = fwrite(fidW, datcpu, 'int16'); % write this batch to binary file
     if count~=numel(datcpu)
         error('Error writing batch %g to %s. Check available disk space.',ibatch,ops.fproc);
