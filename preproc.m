@@ -1,14 +1,18 @@
 %% define paths
 
-clear all; clc;
+sys_flag = 'matlab'; % 'matlab', 'python' - which language will you use?
 
-addpath(genpath('/userdata/lgwilliams/neuropixels/software/npy-matlab-master/npy-matlab/'))
-addpath(genpath('/userdata/lgwilliams/neuropixels/software/')) % path to kilosort folder
-addpath(genpath('/userdata/lgwilliams/neuropixels/')) % path to kilosort folder
-rootZ = '/userdata/lgwilliams/neuropixels/data/NP04/raw/NP04_B2_g0/NP04_B2_g0_imec0/'; % the raw data binary file is in this folder
+addpath(genpath('/home/matt_l/matlab/npy-matlab/'))
+% addpath(genpath('/home/matt_l/matlab/KS_LG_MKL/')) % path to kilosort folder
+addpath(genpath('/home/matt_l/matlab/KS-2.5'))
+addpath(genpath('/home/matt_l/matlab/neuropixels/')) % path to kilosort folder
+addpath(genpath('/home/matt_l/matlab/TIMIT')) % path to timit preproc
+
+timitPath = '/home/matt_l/matlab/TIMIT';
+rootZ = '/userdata/matt_l/neuropixels/NP04/raw/NP04_B2_g0/NP04_B2_g0_imec0/'; % the raw data binary file is in this folder
 rootH = rootZ; % path to temporary binary file (same size as data, should be on fast SSD)
-pathToYourConfigFile = '/userdata/lgwilliams/neuropixels/scripts/configFiles'; % take from Github folder and put it somewhere else (together with the master_file)
-chanMapFile = 'neuropixPhase3B2_kilosortChanMap.mat';
+pathToYourConfigFile = '/home/matt_l/matlab/KS_LG_MKL/configFiles'; % take from Github folder and put it somewhere else (together with the master_file)
+chanMapFile = 'Intraop1_g0_t0.imec0.ap_kilosortChanMap.mat'; %'neuropixPhase3B2_kilosortChanMap.mat';
 
 %% params
 ops.trange    = [240 840]; % time range to sort
@@ -29,9 +33,28 @@ ops.chanMap = fullfile(pathToYourConfigFile, chanMapFile);
 load(ops.chanMap);
 
 % load CORRECTED! event structure
-%events = load(fullfile(rootZ, 'NP04_evnt.mat'));
-%evnt = events.evnt;
-evnt = table2struct(readtable(fullfile(rootZ, 'NP04_evnt_CORRECTED.csv')));
+switch sys_flag
+    case 'matlab'
+        % load event structure
+        events = load(fullfile(rootZ, 'NP04_evnt_corrected.mat'));
+        evnt = events.evnt;
+        evnt_orig = load(fullfile(rootZ, 'NP04_evnt.mat'));
+        evnt_orig = evnt_orig.evnt;
+        for i = 1:length(evnt)
+            tdiff(i) = evnt_orig(i).StartTime - evnt(i).StartTime;
+        end
+    case 'python'
+        %events = load(fullfile(rootZ, 'NP04_evnt.mat'));
+        %evnt = events.evnt;
+        evnt = table2struct(readtable(fullfile(rootZ, 'NP04_evnt_CORRECTED.csv')));
+end
+
+% fix evnt paths
+for i = 1:length(evnt)
+    name = evnt(i).wname;
+    tmp = strsplit(name,'@');
+    evnt(i).wname = [timitPath '/@' tmp{2}];
+end
 
 % load the true channel ordering
 ch_struct = load(fullfile(rootZ, 'NP04_chMap.mat'));
@@ -83,7 +106,7 @@ ops.NT = sfreq*2;
 all_data_ds = preprocessData_returnMatrix(ops);
 
 %% load anin
-anin_path = '/userdata/lgwilliams/neuropixels/data/NP04/raw/NP04_B2_g0';
+anin_path = '/userdata/matt_l/neuropixels/NP04/raw/NP04_B2_g0';
 aninBin_fname = 'NP04_B2_g0_t0.nidq.bin';
 aninMeta_fname = 'NP04_B2_g0_t0.nidq.meta';
 
@@ -140,8 +163,8 @@ n_mua = length(mua_label);
 desired_max_tsamp = sfreq * n_samples_in_seconds;
 
 % 1) init the spike train matrix for SUA and MUA
-sua_spikes = zeros(n_sua, desired_max_tsamp);
-mua_spikes = zeros(n_mua, desired_max_tsamp);
+spikes_sua = zeros(n_sua, desired_max_tsamp);
+spikes_mua = zeros(n_mua, desired_max_tsamp);
 
 % 2) loop through each spike event and put into the correct bin
 for ev = 1:n_spike_events
@@ -159,10 +182,10 @@ for ev = 1:n_spike_events
 
     % put into correct place
     if sum(idx_sua) > 0
-        sua_spikes(idx_sua, s_time) = 1;
+        spikes_sua(idx_sua, s_time) = 1;
     end
     if sum(idx_mua) > 0
-        mua_spikes(idx_mua, s_time) = 1;
+        spikes_mua(idx_mua, s_time) = 1;
     end
     disp(s_time);
 
@@ -178,51 +201,72 @@ for j = 1:length(evnt)
 end
 
 for j = 1:length(evnt)
-    out_spikes(j).name = evnt(j).name;
-    out_sua(j).name = evnt(j).name;
-    out_mua(j).name = evnt(j).name;
+    out(j).name = evnt(j).name;
 end
 
 % params
 tmin = 0.5;
-tmax = 1.5;
+tmax = 1.0;
 nplot_samp = (tmax*new_sfreq) + (tmin*new_sfreq) + 1;
 n_plot_audsamp = (tmax*nSamp_anin) + (tmin*nSamp_anin) + 1;
 
-evoked = zeros(200, 308, nplot_samp);
-spike_ev = zeros(200, 308, 2*new_sfreq);
-spike_ds = zeros(200, 308, 2000);
-evoked_audio = zeros(200, n_plot_audsamp);
-corrcoefs = zeros(1, 200);
+% evoked = zeros(length(evnt), size(all_data_ds,1), nplot_samp);
+spike_ev = zeros(length(evnt), size(all_data_ds,1), 2*new_sfreq);
+spike_ds = zeros(length(evnt), size(all_data_ds,1), 2000);
+evoked_audio = zeros(length(evnt), n_plot_audsamp);
+corrcoefs = zeros(1, length(evnt));
 for j = 1:length(evnt)
 
     % print info
     fprintf('%d ',j);
-    t1 = tic;
+    timerStart = tic;
 
     % epoch data in windows
-    d_wind = all_data_ds(:,round((evnt(j).CorrectStartTime-tmin)*new_fs):round((evnt(j).CorrectStartTime+tmax)*new_fs));
+%     d_wind = all_data_ds(:,round((evnt(j).CorrectStartTime-tmin)*new_fs):round((evnt(j).CorrectStartTime+tmax)*new_fs));
     d_sent = all_data_ds(:,round((evnt(j).CorrectStartTime-tmin)*new_fs):round((evnt(j).StopTime+tmax)*new_fs));
 
     % epoch data in windows
-    sua_sent = sua_spikes(:,round((evnt(j).CorrectStartTime-tmin)*new_fs):round((evnt(j).StopTime+tmax)*new_fs));
-    mua_sent = mua_spikes(:,round((evnt(j).CorrectStartTime-tmin)*new_fs):round((evnt(j).StopTime+tmax)*new_fs));
+    sua_sent = spikes_sua(:,round((evnt(j).CorrectStartTime-tmin)*new_fs):round((evnt(j).StopTime+tmax)*new_fs));
+    mua_sent = spikes_mua(:,round((evnt(j).CorrectStartTime-tmin)*new_fs):round((evnt(j).StopTime+tmax)*new_fs));
 
+    % collect in struct
+    out(j).resp = d_sent; %d_sent(sort_idx, :);
+    out(j).tmin = -tmin; out(j).tmax = tmin;  % symmetric 
+    out(j).dataf = new_fs;
+    out(j).chs_original = chs_original;
+    out(j).chs_physical = sorted_vals;
+    
+    fprintf(1,'Loading %s\n',evnt(j).wname);
+    [t1,fw] = audioread(evnt(j).wname); % load audio file of sound
+    
+    % If the sound is stereo, make it mono only
+    if (size(t1,2)>1)
+        t1=t1(:,1);
+    end
+    % Resample to 16 kHz
+%     t1 = resample(t1,16000,fw);
+%     fw = 16000;
+        
     % epoch anin
-    anin_wind = aninArray(:,round((evnt(j).CorrectStartTime-tmin)*nSamp_anin):round((evnt(j).CorrectStartTime+tmax)*nSamp_anin));
+%     anin_wind = aninArray(:,round((evnt(j).CorrectStartTime-tmin)*nSamp_anin):round((evnt(j).CorrectStartTime+tmax)*nSamp_anin));
     anin_sent = aninArray(:,round((evnt(j).CorrectStartTime-tmin)*nSamp_anin):round((evnt(j).StopTime+tmax)*nSamp_anin));
 
     % aud features
     [env, peakRate, peakEnv] = find_peakRate(anin_sent(3, :), nSamp_anin);
 
-    % collect in struct
-    out(j).resp = d_sent(sort_idx, :);
-    out(j).tmin = -tmin; out(j).tmax = tmax;  % not symmetric anymore
-    out(j).np_sfreq = new_fs;
-    out(j).chs_original = chs_original;
-    out(j).chs_physical = sorted_vals;
-    out(j).anin = anin_sent;
-    out(j).anin_sfreq = nSamp_anin;
+    % Add zero padding on either side as appropriate
+    t1 = [zeros(tmin*fw,1); t1(ceil(abs(tdiff(j))*fw):end) ;zeros(tmin*fw,1)];
+    t1 = resample(t1,new_fs,fw);
+    out(j).soundf = fw;
+    out(j).sound = t1;
+    wintime = 0.025;
+    steptime = 1/fw;
+    pspectrum = powspec(t1, fw, wintime, steptime);
+    aspectrum = audspec(pspectrum, fw, 80, 'mel');
+    aud = aspectrum.^( 0.077);
+    out(j).aud  = aud;
+    out(j).duration = length(t1)/fw;
+
     out(j).envelope = env;
     out(j).peakRate = peakRate;
     out(j).peakEnv = peakEnv;
@@ -238,7 +282,7 @@ for j = 1:length(evnt)
     spk_data = zeros(size(thresh_dat));
     for i = 1:size(thresh_dat,1)
         tmp = findstr([0 thresh_dat(i,:)], [0 1]);
-        tmp(find(diff(tmp) <= 0.001*out(j).np_sfreq)) = [];
+        tmp(find(diff(tmp) <= 0.001*out(j).dataf)) = [];
         spk_data(i,tmp) = 1;
     end
     %out_spikes(j).spikes = spk_data;
@@ -251,7 +295,7 @@ for j = 1:length(evnt)
     thresh = mean(max(x_ds) / 2);
     x_ds_t = x_ds > thresh;
     spike_ds(j, :, :) = x_ds_t(:, 1:2000);
-    out_spikes(j).spikes = x_ds_t;
+    out(j).spikes = x_ds_t;
 
     % check correlation between number of spikes in orig and ds
     rs = corrcoef(sum(spike_ev(j, :, :), 3), sum(spike_ds(j, :, :), 3));
@@ -261,7 +305,7 @@ for j = 1:length(evnt)
     spk_data = zeros(size(sua_sent));
     for i = 1:size(sua_sent, 1)
         tmp = findstr([0 sua_sent(i,:)], [0 1]);
-        tmp(find(diff(tmp) <= 0.001*out(j).np_sfreq)) = [];
+        tmp(find(diff(tmp) <= 0.001*out(j).dataf)) = [];
         spk_data(i,tmp) = 1;
     end
 
@@ -271,14 +315,14 @@ for j = 1:length(evnt)
     % find spike w threshold
     thresh = mean(max(x_ds) / 2);
     x_ds_t = x_ds > thresh;
-    out_sua(j).spikes = x_ds_t;
+    out(j).spikes_sua = x_ds_t;
 
 
     % do the downsampling for the sorted spikes too
     spk_data = zeros(size(mua_sent));
     for i = 1:size(mua_sent, 1)
         tmp = findstr([0 mua_sent(i,:)], [0 1]);
-        tmp(find(diff(tmp) <= 0.001*out(j).np_sfreq)) = [];
+        tmp(find(diff(tmp) <= 0.001*out(j).dataf)) = [];
         spk_data(i,tmp) = 1;
     end
 
@@ -288,14 +332,14 @@ for j = 1:length(evnt)
     % find spike w threshold
     thresh = mean(max(x_ds) / 2);
     x_ds_t = x_ds > thresh;
-    out_mua(j).spikes = x_ds_t;
+    out(j).spikes_mua = x_ds_t;
 
     % matrix
-    evoked(j, :, :) = zscore(double(d_wind(sort_idx, :)));
-    evoked_audio(j, :) = anin_wind(3, :);
+%     evoked(j, :, :) = zscore(double(d_wind(sort_idx, :)));
+%     evoked_audio(j, :) = anin_wind(3, :);
 
     % how long did that take?
-    toc(t1);
+    toc(timerStart);
 end
 
 
@@ -306,19 +350,19 @@ end
 fprintf('Saving final results in .mat file  \n')
 make_fname = strcat('ks_preproc_out_', string(new_sfreq), '.mat');
 fname = fullfile(rootZ, make_fname);
-save(fname, 'out', '-v7');
+save(fname, 'out', '-v7.3');
 
-make_fname = strcat('ks_preproc_spikes_', string(new_sfreq), '.mat');
-fname = fullfile(rootZ, make_fname);
-save(fname, 'out_spikes', '-v7');
-
-make_fname = strcat('lg-ks_sua_', string(new_sfreq), '.mat');
-fname = fullfile(rootZ, make_fname);
-save(fname, 'out_sua', '-v7');
-
-make_fname = strcat('lg-ks_mua_', string(new_sfreq), '.mat');
-fname = fullfile(rootZ, make_fname);
-save(fname, 'out_mua', '-v7');
+% make_fname = strcat('ks_preproc_spikes_', string(new_sfreq), '.mat');
+% fname = fullfile(rootZ, make_fname);
+% save(fname, 'out_spikes', '-v7');
+% 
+% make_fname = strcat('lg-ks_sua_', string(new_sfreq), '.mat');
+% fname = fullfile(rootZ, make_fname);
+% save(fname, 'out_sua', '-v7');
+% 
+% make_fname = strcat('lg-ks_mua_', string(new_sfreq), '.mat');
+% fname = fullfile(rootZ, make_fname);
+% save(fname, 'out_mua', '-v7');
 
 %% helper functions
 
