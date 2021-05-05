@@ -361,27 +361,20 @@ for j = 1:length(evnt)
         case 'mkl'
             t1 = [zeros(tmin*fw,1); t1(ceil(abs(tdiff(j))*fw):end) ;zeros(tmax*fw,1)];
     end
-    %t1 = resample(t1,new_fs,fw); % incorrect
+    t1 = resample(t1,new_fs,fw);
 
-    % spectrogram - run it on the full sample rate and downsample after
+    % spectrogram
     wintime = 0.025;
     steptime = 1/fw;
     pspectrum = powspec(t1, fw, wintime, steptime);
     aspectrum = audspec(pspectrum, fw, 80, 'mel');
     aud = aspectrum.^( 0.077);
     
-    % compute practical fw of aud spec
-    fw_aud = ceil((size(pspectrum, 2) / size(t1, 1)) * fw);
-    
-    % resample it
-    aud_rs = resample(aud', spk_fs_after_decim, fw_aud)';
-    sound_rs = resample(t1', spk_fs_after_decim, fw)';
-
     % add to the struct
-    out(j).soundf = spk_fs_after_decim;
-    out(j).sound = sound_rs;
-    out(j).aud  = aud_rs;
-    %out(j).duration = length(t1)/fw; % incorrect
+    out(j).soundf = fw;
+    out(j).sound = t1;
+    out(j).aud  = aud;
+    out(j).duration = length(t1)/fw;
     
     % add these aud features - they have been resampled to match spike rate
     out(j).envelope = env_rs;
@@ -467,7 +460,7 @@ out(1).mua_info = mua_info;
 %save final results using v7 to load w python. have to use 7.3 for big
 %files
 fprintf('Saving final results in .mat file  \n')
-make_fname = strcat('ks_preproc_out_', string(spk_fs_after_decim), '.mat');
+make_fname = strcat('lg_preproc_out_', string(spk_fs_after_decim), '.mat');
 fname = fullfile(save_dir, make_fname);
 save(fname, 'out', '-v7.3');
 
