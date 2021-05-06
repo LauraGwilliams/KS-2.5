@@ -1,13 +1,13 @@
 %% define params
 
 % branch decisions
-sys_flag = 'python'; % 'matlab', 'python' - which language will you use?
-user = 'lg';
+sys_flag = 'matlab'; % 'matlab', 'python' - which language will you use?
+user = 'mkl';
 
 % data curation params
 ops.trange    = [240 840]; % time range to sort
 ops.NchanTOT  = 385; % total number of channels in your recording
-decimation = 10; % this is for the spikes
+decimation = 30; % this is for the spikes
 
 
 %% paths
@@ -38,7 +38,8 @@ switch user
         rootZ = '/userdata/matt_l/neuropixels/NP04/raw/NP04_B2_g0/NP04_B2_g0_imec0/'; % the raw data binary file is in this folder
         rootH = rootZ; % path to temporary binary file (same size as data, should be on fast SSD)
         pathToYourConfigFile = '/home/matt_l/matlab/KS-2.5/configFiles'; % take from Github folder and put it somewhere else (together with the master_file)
-        ks_output_dir = [rootZ '/out_sort'];
+        ks_output_dir = [rootZ '/out_sort_ks'];
+        save_dir = '/userdata/matt_l/neuropixels/NP04/raw/NP04_B2_g0/NP04_B2_g0_imec0';
 end
 
 % regardless of user:
@@ -123,15 +124,22 @@ end
 
 % find the binary file
 fs = [dir(fullfile(rootZ, '*.bin')) dir(fullfile(rootZ, '*df.dat'))];
-ops.fbinary = fullfile(rootZ, fs(1).name);
+ops.fbinary = fullfile(rootZ, fs(find(contains({fs.name},'ap'))).name);
 
 % preprocess data to create temp_wh.dat
 sfreq = 30000;
 new_sfreq = sfreq;
 spk_fs_after_decim = sfreq / decimation;
 
+% fprintf('Loading preproc binary....\n');
+% meta = ReadMeta('NP04_B2_gnew.meta',rootZ);
+% t0 = round(str2double(meta.imSampRate)*240);
+% t1 = round(str2double(meta.imSampRate)*600);
+% dataArray = ReadBin(t0,t1,meta,'NP04_B2_gnew.bin',rootZ);
+
 % get data
-all_data_ds = preprocessData_returnMatrix(ops);
+load('all_data_ds.mat');
+% all_data_ds = preprocessData_returnMatrix(ops);
 
 %% load anin
 
@@ -223,6 +231,7 @@ for row_i = 1:length(cluster_info)
         
     end
 end
+sua_clust_ids = [sua_info.id];
 
 
 %% derive params
@@ -270,10 +279,6 @@ end
 %% make into a struct
 
 new_fs = new_sfreq;
-
-for j = 1:length(evnt)
-    out(j).name = evnt(j).name;
-end
 
 for j = 1:length(evnt)
     out(j).name = evnt(j).name;
@@ -392,8 +397,9 @@ for j = 1:length(evnt)
     %out_spikes(j).zscore_resp = zscore(double(out(j).resp)')';
     zscore_d = zscore(double(d_sent)')';
 
-    % get spike data
+    % get spike data - MANUAL MUA
     evnt_thresh = 3; % 3 sd's
+    % OLD METHOD
     thresh_dat = abs(zscore_d);
     thresh_dat = thresh_dat > evnt_thresh;
     spk_data = zeros(size(thresh_dat));
@@ -402,54 +408,115 @@ for j = 1:length(evnt)
         tmp(find(diff(tmp) <= 0.001*new_fs)) = [];
         spk_data(i,tmp) = 1;
     end
+    bin_size = 0.001*new_fs;
+    window_idx = 1:bin_size:size(spk_data,2);
+    window_idx = window_idx(1:end-1);
+    counter = 1;
+    clear sua_sent_bin
+    for w = window_idx
+        w_data = spk_data(:,w:w+bin_size-1);
+        spk_data_bin(:,counter) = sum(w_data,2);
+        counter = counter + 1;
+    end
+    out(j).spikes = spk_data_bin;
     %out_spikes(j).spikes = spk_data;
     %spike_ev(j, :, :) = spk_data(:, 1:2*new_sfreq);
-
+    % NEW METHOD
+%     thresh_dat = abs(zscore_d);
+%     spk_data = zeros(size(thresh_dat));
+%     for i = 1:size(thresh_dat,1)
+%         [~,locs] = findpeaks(thresh_dat(i,:),'MinPeakHeight',evnt_thresh,'MinPeakDistance',0.001*new_fs);
+%         spk_data(i,locs) = 1;
+%     end
     % get the downsampled
-    x_ds = resample(spk_data', 1, decimation)';
-
-    % find spike w threshold
-    thresh = mean(max(x_ds) / 2);
-    x_ds_t = x_ds > thresh;
-    %spike_ds(j, :, :) = x_ds_t(:, 1:2000);
-    out(j).spikes = x_ds_t;
+%     x_ds = resample(spk_data', 1, decimation)';
+% 
+%     % find spike w threshold
+%     thresh = mean(max(x_ds) / 2);
+%     x_ds_t = x_ds > thresh;
+%     %spike_ds(j, :, :) = x_ds_t(:, 1:2000);
+%     out(j).spikes = x_ds_t;
 
     % check correlation between number of spikes in orig and ds
     %rs = corrcoef(sum(spike_ev(j, :, :), 3), sum(spike_ds(j, :, :), 3));
     %corrcoefs(j) = rs(2);
-
+    
+    % get spike data - KS SUA
+    % OLD METHOD
     % do the downsampling for the sorted spikes too
-    spk_data = zeros(size(sua_sent));
-    for i = 1:size(sua_sent, 1)
-        tmp = findstr([0 sua_sent(i,:)], [0 1]);
-        tmp(find(diff(tmp) <= 0.001*new_fs)) = [];
-        spk_data(i,tmp) = 1;
+%     spk_data = zeros(size(sua_sent));
+%     for i = 1:size(sua_sent, 1)
+%         tmp = findstr([0 sua_sent(i,:)], [0 1]);
+%         tmp(find(diff(tmp) <= 0.001*new_fs)) = [];
+%         spk_data(i,tmp) = 1;
+%     end
+% 
+%     % get the downsampled
+%     x_ds = resample(spk_data', 1, decimation)';
+% 
+%     % find spike w threshold
+%     thresh = mean(max(x_ds) / 2);
+%     x_ds_t = x_ds > thresh;
+%     out(j).spikes_sua = x_ds_t;
+    % NEW METHOD
+    bin_size = 0.001*new_fs;
+    window_idx = 1:bin_size:size(sua_sent,2);
+    window_idx = window_idx(1:end-1);
+    counter = 1;
+    clear sua_sent_bin
+    for w = window_idx
+        w_data = sua_sent(:,w:w+bin_size-1);
+        sua_sent_bin(:,counter) = sum(w_data,2);
+        counter = counter + 1;
     end
+    out(j).spikes_sua = sua_sent_bin;
 
-    % get the downsampled
-    x_ds = resample(spk_data', 1, decimation)';
-
-    % find spike w threshold
-    thresh = mean(max(x_ds) / 2);
-    x_ds_t = x_ds > thresh;
-    out(j).spikes_sua = x_ds_t;
-
+    % get spike data - KS MUA
+    % OLD METHOD
     % do the downsampling for the sorted spikes too
-    spk_data = zeros(size(mua_sent));
-    for i = 1:size(mua_sent, 1)
-        tmp = findstr([0 mua_sent(i,:)], [0 1]);
-        tmp(find(diff(tmp) <= 0.001*new_fs)) = [];
-        spk_data(i,tmp) = 1;
+%     spk_data = zeros(size(mua_sent));
+%     for i = 1:size(mua_sent, 1)
+%         tmp = findstr([0 mua_sent(i,:)], [0 1]);
+%         tmp(find(diff(tmp) <= 0.001*new_fs)) = [];
+%         spk_data(i,tmp) = 1;
+%     end
+% 
+%     % get the downsampled
+%     x_ds = resample(spk_data', 1, decimation)';
+% 
+%     % find spike w threshold
+%     thresh = mean(max(x_ds) / 2);
+%     x_ds_t = x_ds > thresh;
+%     out(j).spikes_mua = x_ds_t;
+
+    % NEW METHOD
+    bin_size = 0.001*new_fs;
+    window_idx = 1:bin_size:size(mua_sent,2);
+    window_idx = window_idx(1:end-1);
+    counter = 1;
+    clear mua_sent_bin
+    for w = window_idx
+        w_data = mua_sent(:,w:w+bin_size-1);
+        mua_sent_bin(:,counter) = sum(w_data,2);
+        counter = counter + 1;
     end
+    out(j).spikes_mua = mua_sent_bin;
 
-    % get the downsampled
-    x_ds = resample(spk_data', 1, decimation)';
+    % SPIKE WAVEFORMS
+    trlTimes = round((pad_start)*new_fs):round((pad_stop)*new_fs);
+    trlSpikes = find((spike_times >= trlTimes(1) & (spike_times <= trlTimes(end))));
+    trlSpikeClusts = spike_clusters(trlSpikes);
 
-    % find spike w threshold
-    thresh = mean(max(x_ds) / 2);
-    x_ds_t = x_ds > thresh;
-    out(j).spikes_mua = x_ds_t;
-
+    clear spk_wave
+    for i = 1:length(sua_clust_ids)
+        idx = find(trlSpikeClusts == sua_clust_ids(i));
+        for k = 1:length(idx)
+            spk_wave{i}(k,:) = double(all_data_ds(sua_info(i).ch+1,spike_times(trlSpikes(idx(k)) - (0.001*new_fs):...
+                trlSpikes(idx(k)) + (0.001*new_fs))));
+        end
+    end
+    out(j).spike_wave = spk_wave;
+    
     % matrix
 %     evoked(j, :, :) = zscore(double(d_wind(sort_idx, :)));
 %     evoked_audio(j, :) = anin_wind(3, :);
