@@ -1,57 +1,78 @@
-%% define params
+% global script for generating TIMIT out structures.
 
-% branch decisions
-sys_flag = 'python'; % 'matlab', 'python' - which language will you use?
-user = 'lg';
+%% provide subject and block through indices
+subj_n = 1;
+block_n = 1;
 
-% data curation params
-ops.trange    = [240 840]; % time range to sort
-ops.NchanTOT  = 385; % total number of channels in your recording
-decimation = 30; % this is for the spikes
+%% init of items not requiring update re blocks/subjects
 
+% first, load the config file
+define_cfg;
 
-%% paths
+% second, add to path
+addpath(genpath(base_dir)) % add all softwares and datas
 
-% laura's paths:
-switch user
-    % Laura's paths
-    case 'lg'
-        addpath(genpath('/userdata/lgwilliams/neuropixels/software/npy-matlab-master/npy-matlab/'))
-        addpath(genpath('/userdata/lgwilliams/neuropixels/software/')) % path to kilosort folder
-        addpath(genpath('/userdata/lgwilliams/neuropixels/')) % path to kilosort folder
-        rootZ = '/userdata/lgwilliams/neuropixels/data/NP04/raw/NP04_B2_g0/NP04_B2_g0_imec0/'; % the raw data binary file is in this folder
-        rootH = rootZ; % path to temporary binary file (same size as data, should be on fast SSD)
-        pathToYourConfigFile = '/userdata/lgwilliams/neuropixels/software/KS-2.5/configFiles'; % take from Github folder and put it somewhere else (together with the master_file)
-        timitPath = '/home/lgwilliams/matlab/TIMIT';
-        addpath(genpath(timitPath));
-        ks_output_dir = '/userdata/lgwilliams/neuropixels/data/NP04/spike_sorted-mkl';
-        save_dir = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs';
-        
-    % Matt's paths
-    case 'mkl'
-        addpath(genpath('/home/matt_l/matlab/npy-matlab/'))
-        addpath(genpath('/home/matt_l/matlab/KS-2.5')) % path to kilosort folder
-        addpath(genpath('/home/matt_l/matlab/neuropixels/')) % path to kilosort folder
-        addpath(genpath('/home/matt_l/matlab/TIMIT')) % path to timit preproc
+% config file
+pathToYourConfigFile = strcat(base_dir, '/scripts/configFiles'); % take from Github folder and put it somewhere else (together with the master_file)
+run(fullfile(pathToYourConfigFile, 'configFile384.m'))
 
-        timitPath = '/home/matt_l/matlab/TIMIT';
-        rootZ = '/userdata/matt_l/neuropixels/NP04/raw/NP04_B2_g0/NP04_B2_g0_imec0/'; % the raw data binary file is in this folder
-        rootH = rootZ; % path to temporary binary file (same size as data, should be on fast SSD)
-        pathToYourConfigFile = '/home/matt_l/matlab/KS-2.5/configFiles'; % take from Github folder and put it somewhere else (together with the master_file)
-        ks_output_dir = [rootZ '/out_sort_ks'];
-        save_dir = '/userdata/matt_l/neuropixels/NP04/raw/NP04_B2_g0/NP04_B2_g0_imec0';
-end
+%% init items that depend on block/subject
 
-% regardless of user:
-chanMapFile = 'Intraop1_g0_t0.imec0.ap_kilosortChanMap.mat'; %'neuropixPhase3B2_kilosortChanMap.mat';
-anin_path = '/userdata/matt_l/neuropixels/NP04/raw/NP04_B2_g0';
-aninBin_fname = 'NP04_B2_g0_t0.nidq.bin';
-aninMeta_fname = 'NP04_B2_g0_t0.nidq.meta';
+% basics
+subject = cfg(subj_n).subject;
+block = cfg(subj_n).blocks(block_n);
+chanMapFile = cfg(subj_n).chanMapFile;
+crops = cell2mat(cfg(subj_n).crop_times(block_n));
+crop_start = crops(1);
+crop_stop = crops(2);
+
+% paths
+raw_dir = cfg(subj_n).raw_folder;
+folder_name = strcat(subject, '_', block, '_g0');
+imec_name = strcat(folder_name, '_imec0');
+root = strcat(raw_dir, folder_name);
+rootZ = char(strcat(root, '/', imec_name)); % the raw data binary file is in this folder
+
+% paths to ks
+subj_dir = cfg(subj_n).subj_folder;
+ks_output_dir = char(strcat(subj_dir, '/spike_sorted-ks'));
+
+% params
+ops.trange    = cell2mat(cfg(subj_n).crop_times(block_n)); % time range to sort
+ops.NchanTOT  = cfg(subj_n).NchanTOT; % total number of channels in your recording
 
 % deriv paths
-run(fullfile(pathToYourConfigFile, 'configFile384.m'))
-ops.fproc   = fullfile(rootH, 'temp_wh.dat'); % proc file on a fast SSD
+ops.fproc   = fullfile(rootZ, 'temp_wh.dat'); % proc file on a fast SSD
 ops.chanMap = fullfile(pathToYourConfigFile, chanMapFile);
+
+anin_path = char(root);
+aninBin_fname = char(strcat(folder_name, '_t0.nidq.bin'));
+aninMeta_fname = char(strcat(folder_name, '_t0.nidq.meta'));
+
+
+%% load params
+
+% load the channel map
+load(ops.chanMap);
+
+% load CORRECTED! event structure
+%events = load(fullfile(rootZ, 'NP04_evnt.mat'));
+%evnt = events.evnt;
+evnt_file = char(strcat(rootZ, '/', subject, '_', block, '_evnt_CORRECTED.csv'));
+evnt = table2struct(readtable(evnt_file));
+
+% load the true channel ordering
+root_np4 = '/userdata/lgwilliams/neuropixels/data/NP04/raw/NP04_B2_g0/NP04_B2_g0_imec0';
+ch_struct = load(strcat(root_np4, '/NP04_chMap.mat'));
+value_cut = ch_struct.chMap(find(connected == 0));
+
+% which channels we use are defined in the physical space of the probe, not
+% the chronological order of the data
+bad_idx = find(ch_struct.chMap < 10 | ch_struct.chMap > 320);
+connected(bad_idx) = 0;
+connected(find(ch_struct.chMap == 186)) = 0;
+connected(find(ch_struct.chMap == 187)) = 0;
+ops.connected = connected;
 
 % define path to spike data
 spike_times_fname = fullfile(ks_output_dir, 'spike_times.npy');
@@ -63,23 +84,8 @@ spike_clusters_fname = fullfile(ks_output_dir, 'spike_clusters.npy');
 load(ops.chanMap);
 
 % load CORRECTED! event structure
-switch sys_flag
-    case 'matlab'
-        % load event structure
-        events = load(fullfile(rootZ, 'NP04_evnt_corrected.mat'));
-        evnt = events.evnt;
-        evnt_orig = load(fullfile(rootZ, 'NP04_evnt.mat'));
-        evnt_orig = evnt_orig.evnt;
-        
-        % correct the timing?
-        for i = 1:length(evnt)
-            tdiff(i) = evnt_orig(i).StartTime - evnt(i).StartTime;
-        end
-    case 'python'
-        %events = load(fullfile(rootZ, 'NP04_evnt.mat'));
-        %evnt = events.evnt;
-        evnt = table2struct(readtable(fullfile(rootZ, 'NP04_evnt_CORRECTED.csv')));
-end
+evnt_file = char(strcat(rootZ, '/', subject, '_', block, '_evnt_CORRECTED.csv'));
+evnt = table2struct(readtable(evnt_file));
 
 % fix evnt paths
 for i = 1:length(evnt)
@@ -87,10 +93,6 @@ for i = 1:length(evnt)
     tmp = strsplit(name,'@');
     evnt(i).wname = [timitPath '/@' tmp{2}];
 end
-
-% load the true channel ordering
-ch_struct = load(fullfile(rootZ, 'NP04_chMap.mat'));
-value_cut = ch_struct.chMap(find(connected == 0));
 
 % which channels we use are defined in the physical space of the probe, not
 % the chronological order of the data
@@ -129,6 +131,7 @@ ops.fbinary = fullfile(rootZ, fs(find(contains({fs.name},'ap'))).name);
 % preprocess data to create temp_wh.dat
 sfreq = 30000;
 new_sfreq = sfreq;
+decimation = 1; % do not apply.
 spk_fs_after_decim = sfreq / decimation;
 
 % fprintf('Loading preproc binary....\n');
@@ -150,10 +153,11 @@ aninmeta = ReadMeta(aninMeta_fname, anin_path);
 nSamp_anin = floor(1.0 * SampRate(aninmeta));
 
 % timing
-t0 = round(str2double(aninmeta.niSampRate)*240);
-n_samples_in_seconds = 840-240;
+t0 = round(str2double(aninmeta.niSampRate)*crop_start);
+n_samples_in_seconds = crop_stop-crop_start;
 t1 = round(str2double(aninmeta.niSampRate)*n_samples_in_seconds);
 aninArray = ReadBin(t0,t1,aninmeta,aninBin_fname,anin_path);
+
 
 %% load phonetic feature times
 
@@ -562,6 +566,50 @@ for j = 1:length(evnt)
     end
     out(j).spike_wave = spk_wave;
     
+    % add the phonetic and phonemic information
+    sentence_label = out(j).name;
+    phn_tc = zeros(length(phn_cats), size(out(j).spikes_sua, 2));
+    feature_tc = zeros(length(phonetic_features)+1, size(out(j).spikes_sua, 2));
+    for phn_i = 1:length(phn_evnt)
+        
+        % only add if it is the right sentence 
+        if strcmp(sentence_label, phn_evnt(phn_i).sent_name)
+
+            % phn onset
+            onset = floor(phn_evnt(phn_i).start / 16);
+            offset = floor(phn_evnt(phn_i).stop / 16);
+            dur = offset - onset;
+            onset = onset + (tmin*spk_fs_after_decim); % add the 500 ms shift
+
+            % add the phoneme category
+            p_idx = find(phn_cats == phn_evnt(phn_i).phoneme);
+            phn_tc(p_idx, onset:onset+dur) = 1;
+
+            % get the fields
+            fields = fieldnames(phn_evnt(phn_i));
+            for fi = 1:length(fields)
+                f = fields(fi);
+                f_idx = find(f == phonetic_features);
+                if length(f_idx) > 0
+                    val = eval(string(strcat('phn_evnt(phn_i).', f)));
+                    feature_tc(f_idx, onset:onset+dur) = val;
+                end
+            end
+
+            % add sentence onset
+            if phn_i == 1
+                feature_tc(end, onset:onset+dur) = 1;
+            end
+        end
+        
+    end
+    
+    % add to out struct
+    out(j).phn_tc = phn_tc;
+    out(j).feature_tc = feature_tc;
+    out(j).phn_cats = phn_cats;
+    out(j).features = phonetic_features;
+    
     % matrix
 %     evoked(j, :, :) = zscore(double(d_wind(sort_idx, :)));
 %     evoked_audio(j, :) = anin_wind(3, :);
@@ -579,7 +627,7 @@ out(1).mua_info = mua_info;
 %save final results using v7 to load w python. have to use 7.3 for big
 %files
 fprintf('Saving final results in .mat file  \n')
-make_fname = strcat('mkl_preproc_out_', string(spk_fs_after_decim), '.mat');
+make_fname = strcat('ks_preproc_out_', string(spk_fs_after_decim), '.mat');
 fname = fullfile(save_dir, make_fname);
 save(fname, 'out', '-v7.3');
 

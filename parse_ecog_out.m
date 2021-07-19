@@ -2,21 +2,15 @@
 % python
 
 %% define path to out structure
-%out_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ks_preproc_out_1000.mat';
-out_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/117_preproc_out_1000.mat';
-
+out_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ks_preproc_out_1000.mat';
 rootZ = '/userdata/lgwilliams/neuropixels/data/NP04/raw/NP04_B2_g0/NP04_B2_g0_imec0';
 ecog_fname = '/userdata/lgwilliams/neuropixels/data/NP04/raw/ecog/EC237_TIMIT_HilbAA_70to150_8band_mel_out_resp.mat';
 
 % load ecog
 load(ecog_fname);
-ecog = out;
-
-% load the spikes
-load(out_fname);
 
 % get the phonetic info
-phn_evnt = table2struct(readtable(fullfile(rootZ, 'NP04_phon_events.csv')));
+phn_evnt = table2struct(readtable(fullfile(rootZ, 'EC237_phon_events.csv')));
 
 % load formant info
 formant_info = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/out_NP04_formants.mat';
@@ -33,7 +27,7 @@ end
 phn_cats = unique(phn_cats);
 
 % define the features of interest
-phonetic_features = ["phonation_v"; "manner_o"; "manner_a"; ...
+phonetic_features = ["word_onset"; "phonation_v"; "manner_o"; "manner_a"; ...
                      'manner_v'; 'manner_f'; 'manner_n'; "place_l"; ...
                      "place_v"; "place_h"; "place_c"; "place_g"; ...
                      "place_lo"; "place_m"; "place_d"; "frontback_f"; ...
@@ -41,19 +35,34 @@ phonetic_features = ["phonation_v"; "manner_o"; "manner_a"; ...
                      "roundness_r"; "centrality_n"; "centrality_f"; ...
                      "centrality_c"; "surp"; "entropy"];
 
+%% 
+
+feature_labels = ["0"; "1"; "2"; "3"; "4"; "5"; "6"; "7"; "8"; "9"; "10"; "11"; "12";
+       "13"; "14"; "15"; "16"; "17"; "18"; "19"; "20"; "21"; "22"; "23";
+       "24"; "25"; "26"; "27"; "28"; "29"; "30"; "31"; "32"; "33"; "34";
+       "35"; "36"; "37"; "38"; "39"; "40"; "41"; "42"; "43"; "44"; "45";
+       "46"; "47"; "48"; "49"; "50"; "51"; "52"; "53"; "54"; "55"; "56";
+       "57"; "58"; "59"; "60"; "61"; "62"; "63"; "64"; "65"; "66"; "67";
+       "68"; "69"; "70"; "71"; "72"; "73"; "74"; "75"; "76"; "77"; "78";
+       "79"; "F1"; "F2"; "F3"; "F4"; "word_onset"; "phonation_v"; "manner_o"; "manner_a"; ...
+       "manner_v"; "manner_f"; "manner_n"; "place_l"; ...
+       "place_v"; "place_h"; "place_c"; "place_g"; ...
+       "place_lo"; "place_m"; "place_d"; "frontback_f"; ...
+       "frontback_b";"frontback_n"; "roundness_u"; ...
+       "roundness_r"; "centrality_n"; "centrality_f"; ...
+       "centrality_c"; "surp"; "entropy"; "sentence_onset"; "word_onset"; ...
+       "unigram"; "trigram"; "gpt2"];
+
+                 
 %% generate continous matrices
 
 % params
 n_sents = length(out);
-n_sua = size(out(1).spikes_sua, 1);
-n_mel = size(out(1).aud, 1);
-concat_length = 643100;  % overshoot a bit 
+concat_length = 1136228;  % overshoot a bit 
+n_mel = 80;
 
 % init files
 ecog_tc = zeros(256, concat_length);
-sua_spikes = zeros(n_sua, concat_length);
-lfp_ch = zeros(383, concat_length);
-hp_ch = zeros(383, concat_length);
 mel_spec = zeros(n_mel, concat_length);
 phn_tc = zeros(length(phn_cats), concat_length);
 feature_tc = zeros(length(phonetic_features)+2, concat_length); % plus sentence and word onsets
@@ -69,23 +78,23 @@ for si = 1:n_sents
     % we will need this later
     sentence_label = out(si).name;
 
-    % get sentence data
-    this_sua = out(si).spikes_sua;
-    this_lfp = out(si).lfp_ds;
-    this_hp = out(si).resp_ds;
+    % get ecog data
+    this_ecog = out(si).resp;
     
-    % get mel data - downsample: this is an error in making the out
+    % average if this is a rep
+    if length(size(this_ecog)) == 3
+        this_ecog = mean(this_ecog, 3);
+    end
+    
+    % get mel data
     this_mel = out(si).aud;
     
     % determine the size of this sentence
-    n_samps = size(this_sua, 2);
+    n_samps = size(this_ecog, 2);
     smax = smin + n_samps - 1;
     
     % add data to the preallocation
-    sua_spikes(:, smin:smax) = this_sua;
-    lfp_ch(:, smin:smax) = this_lfp(:, 1:n_samps);
-    hp_ch(:, smin:smax) = this_hp(:, 1:n_samps);
-
+    ecog_tc(:, smin:smax) = this_ecog;
     mel_spec(:, smin:smax) = this_mel(:, 1:smax-smin+1);
     
     % add the phoneme stuff
@@ -93,9 +102,12 @@ for si = 1:n_sents
         
         % the npx and mel have already been aligned to the first phoneme
         % not the beginning of the file, so we need to account for that
-        if phn_evnt(phn_i).sentence_onset == 1
-            first_phn_onset = floor(phn_evnt(phn_i).start / 16);
-        end
+        %if phn_evnt(phn_i).sentence_onset == 1
+        %    first_phn_onset = floor(phn_evnt(phn_i).start / 16);
+        %end
+        
+        % not for ecog
+        first_phn_onset = 0;
         
         % only add if it is the right sentence 
         if strcmp(sentence_label, phn_evnt(phn_i).sent_name)
@@ -137,16 +149,16 @@ for si = 1:n_sents
             end
         end
         
-    % collect the formant info
-    if strcmp(sentdet(si).name, out(si).name)
-        f = sentdet(si).formants;
-        formant_tc(:, smin:smax) = f(:, 1:n_samps);
-        
-        % a pitch normalised version
-        for form = 1:4
-            formant_normed_tc(form, smin:smax) = formant_tc(form, smin:smax) / nanmean(formant_tc(form, smin:smax));
-        end
-    end
+%     % collect the formant info
+%     if strcmp(sentdet(si).name, out(si).name)
+%         f = sentdet(si).formants;
+%         formant_tc(:, smin:smax) = f(:, 1:n_samps);
+%         
+%         % a pitch normalised version
+%         for form = 1:4
+%             formant_normed_tc(form, smin:smax) = formant_tc(form, smin:smax) / nanmean(formant_tc(form, smin:smax));
+%         end
+%     end
         
     end
         
@@ -155,33 +167,36 @@ for si = 1:n_sents
     
     % how we doin?
     disp(si);
-        
+    
+    disp(smax);
+    
 end
 
-% normalise the formants
+%% normalise the formants
 formant_tc = formant_tc / max(max(formant_tc));
 
 % save it
-save_mel_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ks_mel-1000.mat';
-save_sua_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/sua117-1000.mat';
-save_hp_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/hp117-1000.mat';
-save_lfp_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/lfp117-1000.mat';
+save_mel_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ecog_mel-1000.mat';
+save_fea_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ecog_fea-1000.mat';
+save_phn_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ecog_phn-1000.mat';
+% save_formant_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ks_formant-1000.mat';
+% save_formant_normed_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ks_formant_normed-1000.mat';
+save_ecog_fname1 = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ecog-1000-pt1.mat';
+save_ecog_fname2 = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ecog-1000-pt2.mat';
+save_probs_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ecog_probs-1000.mat';
 
-save_fea_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ks_fea-1000.mat';
-save_phn_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ks_phn-1000.mat';
-save_formant_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ks_formant-1000.mat';
-save_formant_normed_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ks_formant_normed-1000.mat';
-%save_ecog_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/ecog-1000.mat';
-save_probs_fname = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs/probs-1000.mat';
+% ecog split
+idx = ceil(concat_length/2);
+ecog_tc_1 = ecog_tc(:, 1:idx);
+ecog_tc_2 = ecog_tc(:, idx+1:end);
 
+% save
 save(save_mel_fname, 'mel_spec', '-v7');
-save(save_sua_fname, 'sua_spikes', '-v7');
-save(save_lfp_fname, 'lfp_ch', '-v7');
-save(save_hp_fname, 'hp_ch', '-v7');
-
 save(save_phn_fname, 'phn_tc', '-v7');
 save(save_fea_fname, 'feature_tc', '-v7');
-save(save_formant_fname, 'formant_tc', '-v7');
-save(save_formant_normed_fname, 'formant_normed_tc', '-v7');
-%save(save_ecog_fname, 'ecog_tc', '-v7');
+% save(save_formant_fname, 'formant_tc', '-v7');
+% save(save_formant_normed_fname, 'formant_normed_tc', '-v7');
+save(save_ecog_fname1, 'ecog_tc_1', '-v7');
+save(save_ecog_fname2, 'ecog_tc_2', '-v7');
+
 save(save_probs_fname, 'word_probs', '-v7');

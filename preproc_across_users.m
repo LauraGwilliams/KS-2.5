@@ -24,7 +24,7 @@ switch user
         pathToYourConfigFile = '/userdata/lgwilliams/neuropixels/software/KS-2.5/configFiles'; % take from Github folder and put it somewhere else (together with the master_file)
         timitPath = '/home/lgwilliams/matlab/TIMIT';
         addpath(genpath(timitPath));
-        ks_output_dir = '/userdata/lgwilliams/neuropixels/data/NP04/spike_sorted-ks';
+        ks_output_folder = '/userdata/lgwilliams/neuropixels/data/NP04/';
         save_dir = '/userdata/lgwilliams/neuropixels/data/NP04/out_structs';
         
     % Matt's paths
@@ -38,7 +38,7 @@ switch user
         rootZ = '/userdata/matt_l/neuropixels/NP04/raw/NP04_B2_g0/NP04_B2_g0_imec0/'; % the raw data binary file is in this folder
         rootH = rootZ; % path to temporary binary file (same size as data, should be on fast SSD)
         pathToYourConfigFile = '/home/matt_l/matlab/KS-2.5/configFiles'; % take from Github folder and put it somewhere else (together with the master_file)
-        ks_output_dir = [rootZ '/out_sort_ks'];
+        %ks_output_dir = [rootZ '/out_sort_ks'];
         save_dir = '/userdata/matt_l/neuropixels/NP04/raw/NP04_B2_g0/NP04_B2_g0_imec0';
 end
 
@@ -53,14 +53,11 @@ run(fullfile(pathToYourConfigFile, 'configFile384.m'))
 ops.fproc   = fullfile(rootH, 'temp_wh.dat'); % proc file on a fast SSD
 ops.chanMap = fullfile(pathToYourConfigFile, chanMapFile);
 
-% define path to spike data
-spike_times_fname = fullfile(ks_output_dir, 'spike_times.npy');
-spike_clusters_fname = fullfile(ks_output_dir, 'spike_clusters.npy');
-
 %% load params
 
 % load the channel map
 load(ops.chanMap);
+connected_orig = connected; % will need this for the full probe stuff
 
 % load CORRECTED! event structure
 switch sys_flag
@@ -78,7 +75,7 @@ switch sys_flag
     case 'python'
         %events = load(fullfile(rootZ, 'NP04_evnt.mat'));
         %evnt = events.evnt;
-        evnt = table2struct(readtable(fullfile(rootZ, 'NP04_evnt_CORRECTED.csv')));
+        evnt = table2struct(readtable(fullfile(rootZ, 'NP04_B2_evnt_CORRECTED.csv')));
 end
 
 % fix evnt paths
@@ -137,6 +134,37 @@ spk_fs_after_decim = sfreq / decimation;
 % t1 = round(str2double(meta.imSampRate)*600);
 % dataArray = ReadBin(t0,t1,meta,'NP04_B2_gnew.bin',rootZ);
 
+%% load raw lfp
+%meta_fname = 'NP04_B2_g0_t0.imec0.lf.meta';
+lfp_fname = 'NP04_B2_g0_t0.imec0.lf.bin';
+meta = ReadMeta(lfp_fname, rootZ);  % before i took metafname here
+lfp_sr = str2double(meta.imSampRate);
+t0 = round(lfp_sr*240);
+n_samples_in_seconds = 840-240;
+t1 = round(lfp_sr*n_samples_in_seconds);
+lfp_data = ReadBin(t0,t1,meta,lfp_fname,rootZ);
+
+% apply gain correction
+lfp_data = GainCorrectIM(lfp_data, 1:4, meta);
+
+
+%% matts code
+% binName = 'NP04_B2_g0_t0.imec0.lf.bin';
+% binPath = rootZ;
+% 
+% % Parse the corresponding metafile
+% LFP_meta = ReadMeta(binName, binPath);
+% 
+% t0 = round(str2double(LFP_meta.imSampRate)*240);
+% t1 = round(str2double(LFP_meta.imSampRate)*600); %str2double(meta.fileTimeSecs));
+% dataArray = ReadBin(t0,t1,LFP_meta,binName,binPath);
+% all_data_ds = GainCorrectIM(dataArray, 1:4, LFP_meta);
+
+
+
+
+%%
+
 % get data
 %load('all_data_ds.mat');
 all_data_ds = preprocessData_returnMatrix(ops);
@@ -176,6 +204,11 @@ phonetic_features = ["word_onset"; "phonation_v"; "manner_o"; "manner_a"; ...
                      "roundness_r"; "centrality_n"; "centrality_f"; ...
                      "centrality_c"];
 
+%% ok, load the channel map we used
+load(ops.chanMap); % function to load channel map file
+[depths384, depth_order384] = sort(ycoords);
+[depths383, depth_order383] = sort(ycoords(connected));
+            
 %% OK, be careful in the channel re-ordering, please
 
 % the chanMap is the full 1:384 channel list in chronological order, and connected is the boolean
@@ -185,6 +218,9 @@ phonetic_features = ["word_onset"; "phonation_v"; "manner_o"; "manner_a"; ...
 % 1) subset the physically ordered channels
 % this tells us which of the original channels exist, in which order
 phys_ch_subset = ch_struct.chMap(connected)';
+connected_orig = logical(ones(length(ch_struct.chMap), 1));
+connected_orig(find(ch_struct.chMap == 192)) = 0;  % physical location 192 is the dead one.
+[~, all_ch_sort_idx] = sort(ch_struct.chMap(connected_orig));
 
 % 2) subset the chron channels
 chron_ch_subset = chanMap(connected);
@@ -198,104 +234,219 @@ chs_original = chron_ch_subset(sort_idx);
 %three_spaces = [phys_ch_subset, chron_ch_subset, chs_original, [1:310]'];
 %disp(three_spaces);
 
-%% load the spike sorted output from the .npy files
-%spike_times = readNPY('/userdata/lgwilliams/neuropixels/data/NP04/spike_sorted-lg/spike_times.npy');
-%spike_clusters = readNPY('/userdata/lgwilliams/neuropixels/data/NP04/spike_sorted-lg/spike_clusters.npy');
-
-% read in the files
-spike_times = readNPY(spike_times_fname);
-spike_clusters = readNPY(spike_clusters_fname);
-
-% read in the cluster labels and note the sua and mua cluster ids
-mua_label = [];
-sua_label = [];
-cluster_info = table2struct(readtable(fullfile(ks_output_dir, 'cluster_info.csv')));
-
-% init
-sua_counter = 1; mua_counter = 1;
-clear sua_info
-clear mua_info
-
-% loop
-for row_i = 1:length(cluster_info)
-    
-    % is this a sua cluster?
-    if length(cluster_info(row_i).final) > 0
-        sua_label = [sua_label, cluster_info(row_i).id];
-        
-        % pull out all the info from the cluster csv
-        % OK this code is so ugly plz fix
-        sua_info(sua_counter).id = cluster_info(row_i).id;        
-        sua_info(sua_counter).depth = cluster_info(row_i).depth;
-        sua_info(sua_counter).fr = cluster_info(row_i).fr;
-        sua_info(sua_counter).ch = cluster_info(row_i).ch;
-        sua_info(sua_counter).amp = cluster_info(row_i).Amplitude;
-        sua_info(sua_counter).n_spikes = cluster_info(row_i).n_spikes;
-        sua_info(sua_counter).group = 'sua';
-        sua_counter = sua_counter + 1;
-   
-    % otherwise, is this a mua cluster?
-    % ok this is a dumb way but i'm not sure how else -- 3 chars = "MUA"
-    elseif length(cluster_info(row_i).group) == 3
-        mua_label = [mua_label, cluster_info(row_i).id];
-
-        % pull out all the info from the cluster csv
-        % OK this code is so ugly plz fix
-        mua_info(mua_counter).id = cluster_info(row_i).id;        
-        mua_info(mua_counter).depth = cluster_info(row_i).depth;
-        mua_info(mua_counter).fr = cluster_info(row_i).fr;
-        mua_info(mua_counter).ch = cluster_info(row_i).ch;
-        mua_info(mua_counter).amp = cluster_info(row_i).Amplitude;
-        mua_info(mua_counter).n_spikes = cluster_info(row_i).n_spikes;
-        mua_info(mua_counter).group = 'mua';
-        mua_counter = mua_counter + 1;        
-        
-    end
-end
-sua_clust_ids = [sua_info.id];
+%% define path to spike data
+% 
+% % read the cluster allocations
+% cluster_alloc = table2struct(readtable('/userdata/lgwilliams/neuropixels/data/NP04/agreed_upon_units.csv'));
+% 
+% % sua will be what we defined, and mua will be everything else
+% mua_label = [];
+% sua_label = [];
+% 
+% % init
+% sua_counter = 1; mua_counter = 1;
+% clear sua_info
+% clear mua_info
+% 
+% % loop through each "user" and add the clusters defined for that person
+% for researcher = {'ks', 'mkl', 'lg'}
+%     
+%     % load the clusters of this person
+%     ks_output_dir = strcat(ks_output_folder, 'spike_sorted-', researcher);
+%     spike_times_fname = fullfile(ks_output_dir, 'spike_times.npy');
+%     spike_clusters_fname = fullfile(ks_output_dir, 'spike_clusters.npy');
+%     
+%     % load the spike sorted output from the .npy files
+%     % read in the files
+%     spike_times = readNPY(spike_times_fname);
+%     spike_clusters = readNPY(spike_clusters_fname);
+%     
+%     % get the cluster names of this user
+%     all_cluster_ids = unique(spike_clusters);
+%     
+%     % loop through each entry of the cluster file
+%     for jj = 1:length(cluster_alloc)
+% 
+%         % if its the row we are after
+%         if cluster_alloc(jj).user == researcher
+%      
+%             % pull out all the info from the cluster csv
+%             % OK this code is so ugly plz fix
+%             sua_info(sua_counter).id = cluster_info(row_i).id;        
+%             sua_info(sua_counter).depth = cluster_info(row_i).depth;
+%             sua_info(sua_counter).fr = cluster_info(row_i).fr;
+%             sua_info(sua_counter).ch = cluster_info(row_i).ch;
+%             sua_info(sua_counter).amp = cluster_info(row_i).Amplitude;
+%             sua_info(sua_counter).n_spikes = cluster_info(row_i).n_spikes;
+%             sua_info(sua_counter).group = 'sua';
+%             sua_counter = sua_counter + 1;
+%             
+%             
+%         end
+%     end
+% end
+% 
+% 
+% 
+% 
+% % loop
+% for row_i = 1:length(cluster_info)
+%     
+%     % is this a sua cluster?
+%     if length(cluster_info(row_i).final) > 0
+%         sua_label = [sua_label, cluster_info(row_i).id];
+%         
+%         % pull out all the info from the cluster csv
+%         % OK this code is so ugly plz fix
+%         sua_info(sua_counter).id = cluster_info(row_i).id;        
+%         sua_info(sua_counter).depth = cluster_info(row_i).depth;
+%         sua_info(sua_counter).fr = cluster_info(row_i).fr;
+%         sua_info(sua_counter).ch = cluster_info(row_i).ch;
+%         sua_info(sua_counter).amp = cluster_info(row_i).Amplitude;
+%         sua_info(sua_counter).n_spikes = cluster_info(row_i).n_spikes;
+%         sua_info(sua_counter).group = 'sua';
+%         sua_counter = sua_counter + 1;
+%    
+%     % otherwise, is this a mua cluster?
+%     % ok this is a dumb way but i'm not sure how else -- 3 chars = "MUA"
+%     elseif length(cluster_info(row_i).group) == 3
+%         mua_label = [mua_label, cluster_info(row_i).id];
+% 
+%         % pull out all the info from the cluster csv
+%         % OK this code is so ugly plz fix
+%         mua_info(mua_counter).id = cluster_info(row_i).id;        
+%         mua_info(mua_counter).depth = cluster_info(row_i).depth;
+%         mua_info(mua_counter).fr = cluster_info(row_i).fr;
+%         mua_info(mua_counter).ch = cluster_info(row_i).ch;
+%         mua_info(mua_counter).amp = cluster_info(row_i).Amplitude;
+%         mua_info(mua_counter).n_spikes = cluster_info(row_i).n_spikes;
+%         mua_info(mua_counter).group = 'mua';
+%         mua_counter = mua_counter + 1;        
+%         
+%     end
+% end
+% sua_clust_ids = [sua_info.id];
 
 
 %% derive params
-n_spike_events = length(spike_times);
-max_spike_time = max(spike_times);
-n_clusters = length(unique(spike_clusters));
-n_sua = length(sua_label);
-n_mua = length(mua_label);
+
+% read the cluster allocations
+cluster_alloc = table2struct(readtable('/userdata/lgwilliams/neuropixels/data/NP04/agreed_upon_units-updated.csv'));
 
 % because of the batching, we might end up with more time samples than we
 % asked for. we will see later how we want to deal with this. but for now,
 % lets just ignore any sample which is longer than 600 seconds.
 desired_max_tsamp = sfreq * n_samples_in_seconds;
 
-% 1) init the spike train matrix for SUA and MUA
+% 1) init the spike train matrix, just for the sua for now
+n_sua = length(cluster_alloc);
 spikes_sua = zeros(n_sua, desired_max_tsamp);
-spikes_mua = zeros(n_mua, desired_max_tsamp);
 
-% 2) loop through each spike event and put into the correct bin
-for ev = 1:n_spike_events
+% lets also make a new cluster matrix with just the sua, but across all
+% users, and change the id to the new unique 97 ids
+% no, that doesnt stupid work.... because they will be differences sizes
+% and whatever.... maybe? 
+spike_clusters_new_id = [];
+spike_times_new_id = [];
 
-    % get time and label
-    s_time = spike_times(ev);
-    s_label = spike_clusters(ev);
+% loop through each "user" and add the clusters defined for that person
+for researcher = {'ks', 'lg', 'mkl'}
+    
+    disp(researcher{1});
+    
+    % OK, i have to loop through researchers because that is the
+    % correspondance between the cluster csv and the kilosort output of
+    % cluster list. 
+    
+    % get the cluster ids that are relevant to this user..?
+    r_id_list = [cluster_alloc.id];
+    r_idx_list = [cluster_alloc.sua_id];
+    user_idx = strcmp({cluster_alloc.user}, researcher{1});
+    r_id_list = r_id_list(user_idx);
+    cluster_indices = r_idx_list(user_idx); % possible indices
+    
+    % load the clusters of this person
+    ks_output_dir = strcat(ks_output_folder, 'spike_sorted-', researcher);
+    spike_times_fname = fullfile(ks_output_dir, 'spike_times.npy');
+    spike_clusters_fname = fullfile(ks_output_dir, 'spike_clusters.npy');
+    
+    % load the spike sorted output from the .npy files
+    % read in the files
+    spike_times = readNPY(spike_times_fname{1});
+    spike_clusters = readNPY(spike_clusters_fname{1});
+    n_spike_events = length(spike_times);
+    max_spike_time = max(spike_times);
+    n_clusters = length(unique(spike_clusters));
+    
+    % 2) loop through each spike event and put into the correct bin
+    for ev = 1:n_spike_events
 
-    % the batching issue - maybe lets fix this
-    if s_time < desired_max_tsamp
+        % get time and label
+        s_time = spike_times(ev);
+        s_label = spike_clusters(ev);
 
-    % get identity
-    idx_sua = find(sua_label == s_label);
-    idx_mua = find(mua_label == s_label);
+        % only if this is the cluster we picked
+        if sum(find(s_label == r_id_list)) > 0
 
-    % put into correct place
-    if sum(idx_sua) > 0
-        spikes_sua(idx_sua, s_time) = 1;
+            % the batching issue - maybe lets fix this
+            if s_time < desired_max_tsamp
+
+            % get identity - can be done for multiple suas at a time
+            idx_sua = find(r_id_list == s_label);
+            cluster_idx = cluster_indices(idx_sua);
+            
+            % put into correct place
+            if sum(idx_sua) > 0
+                spikes_sua(cluster_idx, s_time) = 1;
+                
+                % add to the re-allocated cluster id and times
+                spike_clusters_new_id = [spike_clusters_new_id, cluster_idx];
+                spike_times_new_id = [spike_times_new_id, s_time];
+                
+            end
+
+            disp(s_time);
+            end
+            
+            
+        else
+            % add the mua here
+
+            % the batching issue - maybe lets fix this
+            %if s_time < desired_max_tsamp
+
+            % ok lets think about this a second .... soo... the mua wont
+            % have gone through any merges, so the mua should actually be
+            % the same across ks, mkl and lg... maybe that means i can just
+            % take all the mua from a single person, rather than combining
+            % across people? maybe i can make a csv for the mua as well,
+            % and then it will just be a case of going through the same
+            % process 
+                
+            % get identity - can be done for multiple suas at a time
+%             idx_sua = find(r_id_list == s_label);
+%             cluster_idx = cluster_indices(idx_sua);
+%             
+%             % put into correct place
+%             if sum(idx_sua) > 0
+%                 spikes_sua(cluster_idx, s_time) = 1;
+                
+            %end
+            %end
+            
+            
+        end
     end
-    if sum(idx_mua) > 0
-        spikes_mua(idx_mua, s_time) = 1;
-    end
-    disp(s_time);
-
-    end
+    
+    % get the waveforms
+    
 end
+
+% organise the full clusters by time to be contiguous
+[sort_vals, sort_idx_c] = sort(spike_times_new_id);
+spike_times_new_id = spike_times_new_id(sort_idx_c);
+spike_clusters_new_id = spike_clusters_new_id(sort_idx_c);
+
 
 %% make into a struct
 
@@ -337,13 +488,32 @@ for j = 1:length(evnt)
     timerStart = tic;
 
     % epoch data around sentence
-    d_sent = all_data_ds(:,round((pad_start)*new_fs):round((pad_stop)*new_fs));
+    d_sent = all_data_ds(depth_order383, round((pad_start)*new_fs):round((pad_stop)*new_fs));
+    
+    % carefulllllll! 
+    lfp_sent = lfp_data(depth_order384, round((pad_start)*lfp_sr):round((pad_stop)*lfp_sr));
+    % remove the same channel that is missing in hp
+    lfp_sent = lfp_sent(connected(depth_order384), :);
+    
+    %lfp_sent_gain = lfp_data_gain(all_ch_sort_idx, round((pad_start)*lfp_sr):round((pad_stop)*lfp_sr));
 
     % epoch data in windows
     sua_sent = spikes_sua(:,round((pad_start)*new_fs):round((pad_stop)*new_fs));
-    mua_sent = spikes_mua(:,round((pad_start)*new_fs):round((pad_stop)*new_fs));
+    %mua_sent = spikes_mua(:,round((pad_start)*new_fs):round((pad_stop)*new_fs));
 
     % collect in struct
+    
+    % downsample the high passed resp
+    resp_ds = resample(double(d_sent)', spk_fs_after_decim, new_fs)';
+    lfp_ds = resample(double(lfp_sent)', spk_fs_after_decim, lfp_sr)';
+    out(j).lfp_ds = zscore(double(lfp_ds)')';
+    out(j).resp_ds = zscore(double(resp_ds)')';
+    
+    %out(j).lfp_ds_not_z = lfp_ds;
+    %out(j).lfp_matt = zscore(double(lfp_sent)')';
+    
+    %out(j).lfp_ds_gain = resample(double(lfp_sent_gain)', spk_fs_after_decim, lfp_sr)';
+    
     %out(j).resp = d_sent; %d_sent(sort_idx, :);
     out(j).tmin = -tmin; out(j).tmax = tmax;  % not necc symmetric 
     %out(j).dataf = new_fs;
@@ -511,46 +681,55 @@ for j = 1:length(evnt)
 %     out(j).spikes_mua = x_ds_t;
 
     % NEW METHOD
-    bin_size = 0.001*new_fs;
-    window_idx = 1:bin_size:size(mua_sent,2);
-    window_idx = window_idx(1:end-1);
-    counter = 1;
-    clear mua_sent_bin
-    for w = window_idx
-        w_data = mua_sent(:,w:w+bin_size-1);
-        mua_sent_bin(:,counter) = sum(w_data,2);
-        counter = counter + 1;
-    end
-    out(j).spikes_mua = mua_sent_bin;
+    
+    
+    
+    % ADD THIS BACK!!!
+%     bin_size = 0.001*new_fs;
+%     window_idx = 1:bin_size:size(mua_sent,2);
+%     window_idx = window_idx(1:end-1);
+%     counter = 1;
+%     clear mua_sent_bin
+%     for w = window_idx
+%         w_data = mua_sent(:,w:w+bin_size-1);
+%         mua_sent_bin(:,counter) = sum(w_data,2);
+%         counter = counter + 1;
+%     end
+%     out(j).spikes_mua = mua_sent_bin;
 
     % SPIKE WAVEFORMS
+    
+    % this is going to need to be done for each researcher again -- add!!
     
     % time that the sentence started and stopped, in SAMPLES
     trlTimes = round((pad_start)*new_fs):round((pad_stop)*new_fs);
     
-    % get INDEX where the spikes occurred during the sentence
-    trlSpikes = find((spike_times >= trlTimes(1) & (spike_times <= trlTimes(end))));
+    % get INDEX when the spikes occurred during the sentence
+    trlSpikes = find((spike_times_new_id >= trlTimes(1) & (spike_times_new_id <= trlTimes(end))));
     
     % subset spike events (cluster id list) based on indices
-    trlSpikeClusts = spike_clusters(trlSpikes);
+    % ie which spikes fired during the sentence?
+    trlSpikeClusts = spike_clusters_new_id(trlSpikes);
 
     clear spk_wave
     
     % for each cluster index
-    for cluster_index = 1:length(sua_clust_ids)
+    for cluster_index = 1:length(cluster_alloc)
         % find indices of that id
-        idx = find(trlSpikeClusts == sua_clust_ids(cluster_index));
+        %idx = find(trlSpikeClusts == sua_clust_ids(cluster_index));
+        idx = find(trlSpikeClusts == cluster_index);
         % for that spike event
         for event_n = 1:length(idx)
             % crop around the spike time and store it
             
             % 1) get data for central channel
-            ch_n = sua_info(cluster_index).ch+1;
+            %ch_n = sua_info(cluster_index).ch+1;
+            ch_n = cluster_alloc(cluster_index).ch+1;
             
             % 2) get INDEX of central spike for that spike event
             % this is in indices not time, relative to spike_times
             c_idx = trlSpikes(idx(event_n));
-            c_t = spike_times(c_idx);
+            c_t = spike_times_new_id(c_idx);
             
             % 3) get 1 ms before and after
             c_t_min = c_t - (0.001*new_fs);
@@ -615,17 +794,26 @@ for j = 1:length(evnt)
 end
 
 % add sua and mua info to the out 
-out(1).sua_info = sua_info;
-out(1).mua_info = mua_info;
+out(1).sua_info = cluster_alloc; % from the csv
+%out(1).mua_info = mua_info;
 
-%%
+%
 
 %save final results using v7 to load w python. have to use 7.3 for big
 %files
 fprintf('Saving final results in .mat file  \n')
-make_fname = strcat('ks_preproc_out_', string(spk_fs_after_decim), '.mat');
+make_fname = strcat('117_preproc_out_', string(spk_fs_after_decim), '.mat');
 fname = fullfile(save_dir, make_fname);
 save(fname, 'out', '-v7.3');
+
+% save the new times and cluster ids
+make_fname = '117_sua-times.mat';
+fname = fullfile(save_dir, make_fname);
+save(fname, 'spike_times_new_id', '-v7.3');
+make_fname = '117_sua-clusters.mat';
+fname = fullfile(save_dir, make_fname);
+save(fname, 'spike_clusters_new_id', '-v7.3');
+
 
 % make_fname = strcat('ks_preproc_spikes_', string(new_sfreq), '.mat');
 % fname = fullfile(rootZ, make_fname);
@@ -638,6 +826,20 @@ save(fname, 'out', '-v7.3');
 % make_fname = strcat('lg-ks_mua_', string(new_sfreq), '.mat');
 % fname = fullfile(rootZ, make_fname);
 % save(fname, 'out_mua', '-v7');
+
+%% plot some avg lfp
+hp_avg = zeros(200, 383, 2000);
+lfp_avg = zeros(200, 383, 2000);
+
+for tt = 1:200
+    hp_avg(tt, :, :) = out(tt).resp_ds(:, 1:2000);
+    lfp_avg(tt, :, :) = out(tt).lfp_ds(:, 1:2000);
+end
+
+%%
+
+subplot(1, 2, 1); imagesc(squeeze(mean(lfp_avg)), [-2, 2]);
+subplot(1, 2, 2); imagesc(squeeze(mean(hp_avg)), [-0.1, 0.1]);
 
 %% helper functions
 
@@ -707,3 +909,221 @@ function dataArray = ReadBin(samp0, nSamp, meta, binName, path)
     dataArray = fread(fid, sizeA, 'int16=>double');
     fclose(fid);
 end % ReadBin
+
+
+
+
+
+% =========================================================
+% Return an array [lines X timepoints] of uint8 values for
+% a specified set of digital lines.
+%
+% - dwReq is the one-based index into the saved file of the
+%    16-bit word that contains the digital lines of interest.
+% - dLineList is a zero-based list of one or more lines/bits
+%    to scan from word dwReq.
+%
+function digArray = ExtractDigital(dataArray, meta, dwReq, dLineList)
+    % Get channel index of requested digital word dwReq
+    if strcmp(meta.typeThis, 'imec')
+        [AP, LF, SY] = ChannelCountsIM(meta);
+        if SY == 0
+            fprintf('No imec sync channel saved\n');
+            digArray = [];
+            return;
+        else
+            digCh = AP + LF + dwReq;
+        end
+    else
+        [MN,MA,XA,DW] = ChannelCountsNI(meta);
+        if dwReq > DW
+            fprintf('Maximum digital word in file = %d\n', DW);
+            digArray = [];
+            return;
+        else
+            digCh = MN + MA + XA + dwReq;
+        end
+    end
+    [~,nSamp] = size(dataArray);
+    digArray = zeros(numel(dLineList), nSamp, 'uint8');
+    for i = 1:numel(dLineList)
+        digArray(i,:) = bitget(dataArray(digCh,:), dLineList(i)+1, 'int16');
+    end
+end % ExtractDigital
+
+% =========================================================
+% Return a multiplicative factor for converting 16-bit
+% file data to voltage. This does not take gain into
+% account. The full conversion with gain is:
+%
+%   dataVolts = dataInt * fI2V / gain.
+%
+% Note that each channel may have its own gain.
+%
+function fI2V = Int2Volts(meta)
+    if strcmp(meta.typeThis, 'imec')
+        fI2V = str2double(meta.imAiRangeMax) / 512;
+    else
+        fI2V = str2double(meta.niAiRangeMax) / 32768;
+    end
+end % Int2Volts
+
+
+% =========================================================
+% Return array of original channel IDs. As an example,
+% suppose we want the imec gain for the ith channel stored
+% in the binary data. A gain array can be obtained using
+% ChanGainsIM() but we need an original channel index to
+% do the look-up. Because you can selectively save channels
+% the ith channel in the file isn't necessarily the ith
+% acquired channel, so use this function to convert from
+% ith stored to original index.
+%
+% Note: In SpikeGLX channels are 0-based, but MATLAB uses
+% 1-based indexing, so we add 1 to the original IDs here.
+%
+function chans = OriginalChans(meta)
+    if strcmp(meta.snsSaveChanSubset, 'all')
+        chans = (1:str2double(meta.nSavedChans));
+    else
+        chans = str2num(meta.snsSaveChanSubset);
+        chans = chans + 1;
+    end
+end % OriginalChans
+
+
+% =========================================================
+% Return counts of each imec channel type that compose
+% the timepoints stored in binary file.
+%
+function [AP,LF,SY] = ChannelCountsIM(meta)
+    M = str2num(meta.snsApLfSy);
+    AP = M(1);
+    LF = M(2);
+    SY = M(3);
+end % ChannelCountsIM
+
+% =========================================================
+% Return counts of each nidq channel type that compose
+% the timepoints stored in binary file.
+%
+function [MN,MA,XA,DW] = ChannelCountsNI(meta)
+    M = str2num(meta.snsMnMaXaDw);
+    MN = M(1);
+    MA = M(2);
+    XA = M(3);
+    DW = M(4);
+end % ChannelCountsNI
+
+
+% =========================================================
+% Return gain for ith channel stored in the nidq file.
+%
+% ichan is a saved channel index, rather than an original
+% (acquired) index.
+%
+function gain = ChanGainNI(ichan, savedMN, savedMA, meta)
+    if ichan <= savedMN
+        gain = str2double(meta.niMNGain);
+    elseif ichan <= savedMN + savedMA
+        gain = str2double(meta.niMAGain);
+    else
+        gain = 1;
+    end
+end % ChanGainNI
+
+
+% =========================================================
+% Return gain arrays for imec channels.
+%
+% Index into these with original (acquired) channel IDs.
+%
+function [APgain,LFgain] = ChanGainsIM(meta)
+
+    if isfield(meta,'imDatPrb_dock')
+        [AP,LF,~] = ChannelCountsIM(meta);
+        % NP 2.0; APgain = 80 for all channels
+        APgain = zeros(AP,1,'double');
+        APgain = APgain + 80;
+        % No LF channels, set gain = 0
+        LFgain = zeros(LF,1,'double');
+    else
+        % 3A or 3B data?
+        % 3A metadata has field "typeEnabled" which was replaced
+        % with "typeImEnabled" and "typeNiEnabled" in 3B.
+        % The 3B imro table has an additional field for the
+        % high pass filter enabled/disabled
+        if isfield(meta,'typeEnabled')
+            % 3A data
+            C = textscan(meta.imroTbl, '(%*s %*s %*s %d %d', ...
+                'EndOfLine', ')', 'HeaderLines', 1 );
+        else
+            % 3B data
+            C = textscan(meta.imroTbl, '(%*s %*s %*s %d %d %*s', ...
+                'EndOfLine', ')', 'HeaderLines', 1 );
+        end
+        APgain = double(cell2mat(C(1)));
+        LFgain = double(cell2mat(C(2)));
+    end
+end % ChanGainsIM
+
+
+% =========================================================
+% Having acquired a block of raw nidq data using ReadBin(),
+% convert values to gain-corrected voltages. The conversion
+% is only applied to the saved-channel indices in chanList.
+% Remember saved-channel indices are in range [1:nSavedChans].
+% The dimensions of the dataArray remain unchanged. ChanList
+% examples:
+%
+%   [1:MN]      % all MN chans (MN from ChannelCountsNI)
+%   [2,6,20]    % just these three channels
+%
+function dataArray = GainCorrectNI(dataArray, chanList, meta)
+
+    [MN,MA] = ChannelCountsNI(meta);
+    fI2V = Int2Volts(meta);
+
+    for i = 1:length(chanList)
+        j = chanList(i);    % index into timepoint
+        conv = fI2V / ChanGainNI(j, MN, MA, meta);
+        dataArray(j,:) = dataArray(j,:) * conv;
+    end
+end
+
+
+% =========================================================
+% Having acquired a block of raw imec data using ReadBin(),
+% convert values to gain-corrected voltages. The conversion
+% is only applied to the saved-channel indices in chanList.
+% Remember saved-channel indices are in range [1:nSavedChans].
+% The dimensions of the dataArray remain unchanged. ChanList
+% examples:
+%
+%   [1:AP]      % all AP chans (AP from ChannelCountsIM)
+%   [2,6,20]    % just these three channels
+%
+function dataArray = GainCorrectIM(dataArray, chanList, meta)
+
+    % Look up gain with acquired channel ID
+    chans = OriginalChans(meta);
+    [APgain,LFgain] = ChanGainsIM(meta);
+    nAP = length(APgain);
+    nNu = nAP * 2;
+
+    % Common conversion factor
+    fI2V = Int2Volts(meta);
+
+    for i = 1:length(chanList)
+        j = chanList(i);    % index into timepoint
+        k = chans(j);       % acquisition index
+        if k <= nAP
+            conv = fI2V / APgain(k);
+        elseif k <= nNu
+            conv = fI2V / LFgain(k - nAP);
+        else
+            continue;
+        end
+        dataArray(j,:) = dataArray(j,:) * conv;
+    end
+end
